@@ -78,25 +78,44 @@ export default function Dashboard() {
     const [viewMode, setViewMode] = useState<"list" | "grid">("list");
     const [searchQuery, setSearchQuery] = useState("");
 
-    // Fetch Devices on Load
+    // Fetch Devices (and load from localStorage)
     useEffect(() => {
         async function fetchDevices() {
             try {
-                // Note: Listing root collections clientside might be restricted 
-                // if many docs exist, but usually fine for <100 docs.
                 const querySnapshot = await getDocs(collection(db, "sanary_monitor"));
-                const deviceIds = querySnapshot.docs.map((doc) => doc.id);
-                setDevices(deviceIds);
-                if (deviceIds.length > 0) {
-                    setSelectedDevice(deviceIds[0]);
+                const fetchedIds = querySnapshot.docs.map((doc) => doc.id);
+
+                // Merge with locally saved IDs
+                const saved = localStorage.getItem("sanary_device_ids");
+                const savedIds = saved ? JSON.parse(saved) : [];
+                const uniqueIds = Array.from(new Set([...fetchedIds, ...savedIds])) as string[]; // Explicit cast
+
+                setDevices(uniqueIds);
+                if (uniqueIds.length > 0 && !selectedDevice) {
+                    setSelectedDevice(uniqueIds[0]);
                 }
             } catch (err: any) {
                 console.error("Error fetching devices:", err);
-                setError("Could not load devices. Check permissions.");
+                // Fallback to local
+                const saved = localStorage.getItem("sanary_device_ids");
+                if (saved) {
+                    const ids = JSON.parse(saved) as string[];
+                    setDevices(ids);
+                    if (ids.length > 0) setSelectedDevice(ids[0]);
+                }
             }
         }
         fetchDevices();
     }, []);
+
+    const handleAddDevice = (id: string) => {
+        if (!id) return;
+        const newDevices = [...devices, id];
+        setDevices(newDevices);
+        setSelectedDevice(id);
+        localStorage.setItem("sanary_device_ids", JSON.stringify(newDevices));
+        setSearchQuery(""); // Clear input if used there
+    };
 
     // Fetch Data when Device/Date changes
     useEffect(() => {
@@ -196,9 +215,9 @@ export default function Dashboard() {
                     <p className="text-zinc-400 text-sm mt-1">Digital Wellbeing & Usage Monitor</p>
                 </div>
 
-                <div className="flex flex-wrap gap-3">
+                <div className="flex flex-wrap gap-3 items-center">
                     {/* Device Selector */}
-                    <div className="relative group">
+                    <div className="relative group flex items-center gap-2">
                         <Smartphone className="absolute left-3 top-2.5 h-4 w-4 text-zinc-400" />
                         <select
                             value={selectedDevice}
@@ -208,6 +227,19 @@ export default function Dashboard() {
                             {devices.map(d => <option key={d} value={d}>{d.replace(/_/g, " ")}</option>)}
                             {devices.length === 0 && <option>No devices found</option>}
                         </select>
+
+                        {/* Manual Add Trigger */}
+                        <input
+                            type="text"
+                            placeholder="Add ID..."
+                            className="w-24 px-2 py-2 bg-zinc-900 border border-zinc-800 rounded-xl text-xs focus:outline-none focus:border-rose-500"
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                    handleAddDevice((e.target as HTMLInputElement).value);
+                                    (e.target as HTMLInputElement).value = '';
+                                }
+                            }}
+                        />
                     </div>
 
                     {/* Date Picker */}
