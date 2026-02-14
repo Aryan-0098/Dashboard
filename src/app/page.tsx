@@ -1,8 +1,6 @@
 
+import Dashboard from "@/components/Dashboard";
+
 export default function Home() {
-  return (
-    <div className="flex min-h-screen items-center justify-center">
-      <h1 className="text-4xl font-bold text-rose-500">Sanary Dashboard Deployment Test</h1>
-    </div>
-  );
+  return <Dashboard />;
 }
