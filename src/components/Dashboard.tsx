@@ -132,20 +132,7 @@ export default function Dashboard() {
             try {
                 // Fetch App Usage
                 // We look for the LATEST synced data for the selected date
-                // Path: sanary_monitor/{deviceId}/{date}/app_usage/{docId}
-                const usageRef = collection(
-                    db,
-                    "sanary_monitor",
-                    selectedDevice,
-                    selectedDate,
-                    "app_usage" // Wait, are these subcollections or docs?
-                    // Looking at Android code: .collection(date).document("app_usage_$ts")
-                    // So 'app_usage' is NOT a collection passed to collection(), 
-                    // it's a prefix of a document ID inside the {date} collection.
-                    // Wait, Android code:
-                    // firestore.collection(ROOT).document(deviceId).collection(date).document("app_usage_$ts").set(...)
-                    // So the collection IS {date}. The documents are 'app_usage_...'
-                );
+                // Path: sanary_monitor/{deviceId}/{date}/app_usage_{timestamp}
 
                 // This is tricky. The valid collection path is `sanary_monitor/{deviceId}/{date}`.
                 // We can't query a collection path that is dynamic like that easily if we don't know the exact date collection name logic?
