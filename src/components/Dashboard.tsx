@@ -103,6 +103,8 @@ export default function Dashboard() {
                     setDevices(ids);
                     if (ids.length > 0) setSelectedDevice(ids[0]);
                 }
+                // Show actual error
+                setError(`Device Fetch Error: ${err.message || JSON.stringify(err)}`);
             }
         }
         fetchDevices();
@@ -186,7 +188,7 @@ export default function Dashboard() {
 
             } catch (err: any) {
                 console.error("Error fetching data:", err);
-                setError("Failed to fetch data.");
+                setError(`Data Fetch Error: ${err.code} - ${err.message}`);
             } finally {
                 setLoading(false);
             }
