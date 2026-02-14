@@ -235,7 +235,10 @@ export default function Dashboard() {
                             className="w-24 px-2 py-2 bg-zinc-900 border border-zinc-800 rounded-xl text-xs focus:outline-none focus:border-rose-500"
                             onKeyDown={(e) => {
                                 if (e.key === 'Enter') {
-                                    handleAddDevice((e.target as HTMLInputElement).value);
+                                    // Sanitize: match Android's Build.MODEL logic (spaces to underscores)
+                                    const raw = (e.target as HTMLInputElement).value.trim();
+                                    const sanitized = raw.replace(/ /g, "_").replace(/\//g, "-");
+                                    handleAddDevice(sanitized);
                                     (e.target as HTMLInputElement).value = '';
                                 }
                             }}
@@ -254,6 +257,11 @@ export default function Dashboard() {
                     </div>
                 </div>
             </header>
+
+            {/* Debug Path Info */}
+            <div className="mb-4 px-2 text-[10px] text-zinc-600 font-mono">
+                Querying: sanary_monitor/{selectedDevice}/{selectedDate}
+            </div>
 
             {/* Main Content */}
             <main className="grid grid-cols-1 lg:grid-cols-3 gap-6">
