@@ -266,6 +266,17 @@ export default function Dashboard() {
             {/* Main Content */}
             <main className="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
+                {/* Error Alert */}
+                {error && (
+                    <div className="lg:col-span-3 bg-red-500/10 border border-red-500/50 p-4 rounded-xl flex items-center gap-3 text-red-200">
+                        <Activity className="h-5 w-5 text-red-400" />
+                        <div>
+                            <p className="font-bold text-sm">Connection Error</p>
+                            <p className="text-xs">{error}</p>
+                        </div>
+                    </div>
+                )}
+
                 {/* Left Column: Stats & Overview */}
                 <div className="space-y-6 lg:col-span-1">
                     {/* Hero Card: Screen Time */}

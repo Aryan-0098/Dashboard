@@ -10,8 +10,10 @@ const firebaseConfig = {
     projectId: "sanary-8f0ed",
     storageBucket: "sanary-8f0ed.firebasestorage.app",
     messagingSenderId: "141945564139",
-    appId: "1:141945564139:web:d2f6202ea250f2de9807ae", // Placeholder web app ID or same as Android (won't affect Firestore)
+    appId: "1:141945564139:web:d2f6202ea250f2de9807ae",
 };
+
+console.log("Initializing Firebase with:", firebaseConfig.projectId);
 
 // Initialize Firebase
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
