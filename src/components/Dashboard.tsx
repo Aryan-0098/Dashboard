@@ -13,7 +13,7 @@ import {
     orderBy,
     where,
 } from "firebase/firestore";
-import { formatDuration, formatTimeAgo, cn } from "@/lib/utils";
+import { formatDuration, formatTimeAgo, cn, formatAppName } from "@/lib/utils";
 import {
     Smartphone,
     Calendar as CalendarIcon,
@@ -186,9 +186,11 @@ export default function Dashboard() {
 
     // Derived state
     const totalScreenTime = usageStats?.totalScreenTimeMs || 0;
-    const filteredApps = usageStats?.apps.filter(app =>
-        app.appName.toLowerCase().includes(searchQuery.toLowerCase())
-    ).sort((a, b) => b.usageTimeMs - a.usageTimeMs) || [];
+    const filteredApps = usageStats?.apps.filter(app => {
+        const displayName = formatAppName(app.packageName, app.appName);
+        return displayName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            app.appName.toLowerCase().includes(searchQuery.toLowerCase());
+    }).sort((a, b) => b.usageTimeMs - a.usageTimeMs) || [];
 
     const maxUsageTime = filteredApps.length > 0 ? filteredApps[0].usageTimeMs : 1;
 
@@ -302,7 +304,13 @@ export default function Dashboard() {
                                 <span className="text-xs font-medium">Battery</span>
                             </div>
                             <div className="flex items-baseline gap-1">
-                                <div className="text-2xl font-bold">{(deviceStats?.batteryLevel || 0) * 100}%</div>
+                                <div className="text-2xl font-bold">
+                                    {(() => {
+                                        const level = deviceStats?.batteryLevel || 0;
+                                        // Handle both 0-1 (float) and 0-100 (int) formats
+                                        return level > 1 ? Math.round(level) : Math.round(level * 100);
+                                    })()}%
+                                </div>
                                 {deviceStats?.isCharging && <span className="text-[10px] text-green-400">⚡ Charging</span>}
                             </div>
                         </div>
@@ -385,10 +393,10 @@ export default function Dashboard() {
                                                 "w-10 h-10 rounded-xl flex items-center justify-center font-bold text-sm shadow-inner",
                                                 COLORS[idx % COLORS.length]
                                             )}>
-                                                {app.appName.charAt(0).toUpperCase()}
+                                                {formatAppName(app.packageName, app.appName).charAt(0).toUpperCase()}
                                             </div>
                                             <div>
-                                                <h3 className="font-medium text-zinc-200">{app.appName}</h3>
+                                                <h3 className="font-medium text-zinc-200">{formatAppName(app.packageName, app.appName)}</h3>
                                                 <p className="text-xs text-zinc-500">
                                                     {app.launchCount} opens • Last used {formatTimeAgo(app.lastTimeUsed)}
                                                 </p>
