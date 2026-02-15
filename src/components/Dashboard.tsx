@@ -12,6 +12,7 @@ import {
     limit,
     orderBy,
     where,
+    onSnapshot,
 } from "firebase/firestore";
 import { formatDuration, formatTimeAgo, cn, formatAppName } from "@/lib/utils";
 import {
@@ -146,135 +147,141 @@ export default function Dashboard() {
 
             try {
                 // Fetch App Usage
-                // We look for the LATEST synced data for the selected date
+                setLoading(true);
+                setError("");
+                setDebugInfo(""); // Clear debug info
+
+                // Clear stats immediately to prevent data leakage between devices
+                setUsageStats(null);
+                setDeviceStats(null);
+
                 // Path: sanary_monitor/{deviceId}/{date}/app_usage_{timestamp}
 
                 // This is tricky. The valid collection path is `sanary_monitor/{deviceId}/{date}`.
                 // We can't query a collection path that is dynamic like that easily if we don't know the exact date collection name logic?
                 // Ah, `selectedDate` IS the collection name (e.g. "2024-05-20").
                 // So we query collection(db, "sanary_monitor", selectedDevice, selectedDate)
-                // AND we filter by document ID starting with "app_usage"? 
+                // AND we filter by document ID starting with "app_usage"?
                 // Firestore client SDK doesn't support "startsWith" on document ID efficiently in all cases.
                 // BUT, we can just fetch all docs in that date collection (it usually has only ~3-10 docs per day: some app_usage, some events, some device snapshots).
                 // It's cheaper to read the whole collection for the day.
 
-                const getStartOfDay = (dateString: string) => {
-                    if (!dateString) return 0;
-                    const [y, m, d] = dateString.split('-').map(Number);
-                    return new Date(y, m - 1, d).getTime();
-                };
-
-                // Fetch all docs for the date to find First and Last snapshots
-                if (!selectedDevice) return;
                 const dateCollectionRef = collection(db, "sanary_monitor", selectedDevice, selectedDate);
-                const snapshot = await getDocs(dateCollectionRef);
 
-                if (snapshot.empty) {
-                    setLoading(false);
-                    return;
-                }
-
-                // 1. Separate App Usage snapshots and Device snapshots
-                const appUsageSnapshots: UsageStats[] = [];
-                let latestDevice: DeviceStats | null = null;
-
-                snapshot.forEach(doc => {
-                    const data = doc.data();
-                    if (doc.id.startsWith("app_usage_")) {
-                        appUsageSnapshots.push(data as UsageStats);
-                    } else if (doc.id.startsWith("device_")) {
-                        if (!latestDevice || (data.timestamp > latestDevice.timestamp)) {
-                            latestDevice = data as DeviceStats;
+                const unsubscribe = onSnapshot(dateCollectionRef, (snapshot) => {
+                    try {
+                        if (snapshot.empty) {
+                            setLoading(false);
+                            setUsageStats(null); // Ensure stats are cleared if no data
+                            setDeviceStats(null); // Ensure stats are cleared if no data
+                            return;
                         }
-                    }
-                });
 
-                setDeviceStats(latestDevice);
+                        // 1. Separate App Usage snapshots and Device snapshots
+                        const appUsageSnapshots: UsageStats[] = [];
+                        let latestDevice: DeviceStats | null = null;
 
-                // 2. Sort usage snapshots by timestamp
-                appUsageSnapshots.sort((a, b) => a.timestamp - b.timestamp);
+                        snapshot.forEach(doc => {
+                            const data = doc.data();
+                            if (doc.id.startsWith("app_usage_")) {
+                                appUsageSnapshots.push(data as UsageStats);
+                            } else if (doc.id.startsWith("device_")) {
+                                if (!latestDevice || (data.timestamp > latestDevice.timestamp)) {
+                                    latestDevice = data as DeviceStats;
+                                }
+                            }
+                        });
 
-                // Filter out snapshots with no apps (common on fresh install before permissions settle)
-                const validSnapshots = appUsageSnapshots.filter(s => s.apps && s.apps.length > 0);
+                        setDeviceStats(latestDevice);
 
-                if (validSnapshots.length === 0) {
-                    setUsageStats(null);
-                    setLoading(false);
-                    return;
-                }
+                        // 2. Sort usage snapshots by timestamp
+                        appUsageSnapshots.sort((a, b) => a.timestamp - b.timestamp);
 
-                const earliest = validSnapshots[0];
-                const latest = validSnapshots[validSnapshots.length - 1];
+                        // Filter out snapshots with no apps (common on fresh install before permissions settle)
+                        const validSnapshots = appUsageSnapshots.filter(s => s.apps && s.apps.length > 0);
 
-                // Calculate physical time window of monitoring
-                const monitoringDuration = Math.max(0, latest.timestamp - earliest.timestamp);
-
-                // Add buffer to monitoring duration (e.g. +1 min) to avoid strict cutoff floating point issues
-                // Actually, if we missed the start of the minute, we might under-count. 
-                // But generally, Usage CANNOT overlap Time. 
-                // However, Android usage stats might have slightly different clock than System.currentTimeMillis. 
-                // Let's be generous: maxPossible = duration * 1.1 + 5 minutes.
-                // No, strict is better for the user's issue.
-                const maxPossibleUsage = monitoringDuration + 60000; // +1 minute buffer
-
-                // 3. Calculate Delta (Latest - Earliest)
-                const processedApps = latest.apps.map(latestApp => {
-                    // Find this app in the earliest snapshot from the SAME day
-                    const earliersApp = earliest.apps.find(a => a.packageName === latestApp.packageName);
-
-                    let usageDelta = latestApp.usageTimeMs;
-
-                    if (earliersApp) {
-                        const delta = latestApp.usageTimeMs - earliersApp.usageTimeMs;
-                        // If delta is robustly positive, use it.
-                        // If delta is negative (bucket reset), use latest.
-                        if (delta >= 0) {
-                            usageDelta = delta;
-                        } else {
-                            // Bucket reset: usage is just what's in latest
-                            usageDelta = latestApp.usageTimeMs;
+                        if (validSnapshots.length === 0) {
+                            setUsageStats(null);
+                            setLoading(false);
+                            return;
                         }
-                    } else {
-                        // App missing from baseline.
-                        // If baseline was "late", this might be carried over data.
-                        // CLAMP: Usage cannot exceed the time we've been watching.
-                        // This fixes the "Install at 8pm -> 9h usage" bug.
-                        // But wait, if usageDelta (latest) is 9h, and maxPossible is 15m.
-                        // Result = 15m. Correct.
-                    }
 
-                    // Apply strict clamping
-                    // "You cannot use an app for 2 hours in a 1 hour window"
-                    // Exception: If monitoringDuration is 0 (first snapshot), maxPossible is 1m. Usage is clamped to 1m.
-                    // This effectively zeros out pre-existing usage on the very first snapshot of a new install.
-                    if (usageDelta > maxPossibleUsage) {
-                        usageDelta = maxPossibleUsage;
-                    }
+                        const earliest = validSnapshots[0];
+                        const latest = validSnapshots[validSnapshots.length - 1];
 
-                    return { ...latestApp, usageTimeMs: usageDelta };
+                        // Calculate physical time window of monitoring
+                        const monitoringDuration = Math.max(0, latest.timestamp - earliest.timestamp);
+
+                        // Add buffer to monitoring duration (e.g. +1 min) to avoid strict cutoff floating point issues
+                        // Actually, if we missed the start of the minute, we might under-count.
+                        // But generally, Usage CANNOT overlap Time.
+                        // However, Android usage stats might have slightly different clock than System.currentTimeMillis.
+                        // Let's be generous: maxPossible = duration * 1.1 + 5 minutes.
+                        // No, strict is better for the user's issue.
+                        const maxPossibleUsage = monitoringDuration + 60000; // +1 minute buffer
+
+                        // 3. Calculate Delta (Latest - Earliest)
+                        const processedApps = latest.apps.map(latestApp => {
+                            // Find this app in the earliest snapshot from the SAME day
+                            const earliersApp = earliest.apps.find(a => a.packageName === latestApp.packageName);
+
+                            let usageDelta = latestApp.usageTimeMs;
+
+                            if (earliersApp) {
+                                const delta = latestApp.usageTimeMs - earliersApp.usageTimeMs;
+                                // If delta is robustly positive, use it.
+                                // If delta is negative (bucket reset), use latest.
+                                if (delta >= 0) {
+                                    usageDelta = delta;
+                                } else {
+                                    // Bucket reset: usage is just what's in latest
+                                    usageDelta = latestApp.usageTimeMs;
+                                }
+                            } else {
+                                // App missing from baseline.
+                                // If baseline was "late", this might be carried over data.
+                                // CLAMP: Usage cannot exceed the time we've been watching.
+                                // This fixes the "Install at 8pm -> 9h usage" bug.
+                                // But wait, if usageDelta (latest) is 9h, and maxPossible is 15m.
+                                // Result = 15m. Correct.
+                            }
+
+                            // Apply strict clamping
+                            // "You cannot use an app for 2 hours in a 1 hour window"
+                            // Exception: If monitoringDuration is 0 (first snapshot), maxPossible is 1m. Usage is clamped to 1m.
+                            // This effectively zeros out pre-existing usage on the very first snapshot of a new install.
+                            if (usageDelta > maxPossibleUsage) {
+                                usageDelta = maxPossibleUsage;
+                            }
+
+                            return { ...latestApp, usageTimeMs: usageDelta };
+                        });
+
+                        // 4. Update State with processed apps
+                        setDebugInfo(`Base: ${new Date(earliest.timestamp).toLocaleTimeString()} (${earliest.apps.length} apps) -> End: ${new Date(latest.timestamp).toLocaleTimeString()}`);
+
+                        // We keep 'timestamp' from latest to show "Last Updated"
+                        setUsageStats({
+                            ...latest,
+                            apps: processedApps,
+                            // Recalculate total screen time based on deltas
+                            totalScreenTimeMs: processedApps.reduce((acc, app) => acc + app.usageTimeMs, 0)
+                        });
+
+                    } catch (err: any) {
+                        console.error("Error processing data:", err);
+                        setError(`Data Processing Error: ${err.message}`);
+                    } finally {
+                        setLoading(false);
+                    }
+                }, (err) => {
+                    console.error("Error subscribing to data:", err);
+                    setError(`Real-time Sync Error: ${err.code} - ${err.message}`);
+                    setLoading(false);
                 });
 
-                // 4. Update State with processed apps
-                setDebugInfo(`Base: ${new Date(earliest.timestamp).toLocaleTimeString()} (${earliest.apps.length} apps) -> End: ${new Date(latest.timestamp).toLocaleTimeString()}`);
-
-                // We keep 'timestamp' from latest to show "Last Updated"
-                setUsageStats({
-                    ...latest,
-                    apps: processedApps,
-                    // Recalculate total screen time based on deltas
-                    totalScreenTimeMs: processedApps.reduce((acc, app) => acc + app.usageTimeMs, 0)
-                });
-
-            } catch (err: any) {
-                console.error("Error fetching data:", err);
-                setError(`Data Fetch Error: ${err.code} - ${err.message}`);
-            } finally {
-                setLoading(false);
-            }
-        }
-
-        fetchData();
-    }, [selectedDevice, selectedDate]);
+                return () => unsubscribe();
+            }, [selectedDevice, selectedDate]);
 
     // Derived state
     const totalScreenTime = usageStats?.totalScreenTimeMs || 0;
