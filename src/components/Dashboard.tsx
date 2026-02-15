@@ -28,7 +28,9 @@ import {
     ChevronUp,
     Search,
     LayoutGrid,
-    List as ListIcon
+    List as ListIcon,
+    Database,
+    RotateCw,
 } from "lucide-react";
 
 // Types
@@ -93,6 +95,8 @@ export default function Dashboard() {
     const [debugInfo, setDebugInfo] = useState<string>("");
     const [viewMode, setViewMode] = useState<"list" | "grid">("list");
     const [searchQuery, setSearchQuery] = useState("");
+    const [refreshKey, setRefreshKey] = useState(0);
+    const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
     // Fetch Devices (and load from localStorage)
     useEffect(() => {
@@ -161,6 +165,20 @@ export default function Dashboard() {
                 // We can't query a collection path that is dynamic like that easily if we don't know the exact date collection name logic?
                 // Ah, `selectedDate` IS the collection name (e.g. "2024-05-20").
                 // So we query collection(db, "sanary_monitor", selectedDevice, selectedDate)
+                setLoading(true);
+                setError("");
+                setDebugInfo(""); // Clear debug info
+
+                // Clear stats immediately to prevent data leakage between devices
+                setUsageStats(null);
+                setDeviceStats(null);
+
+                // Path: sanary_monitor/{deviceId}/{date}/app_usage_{timestamp}
+
+                // This is tricky. The valid collection path is `sanary_monitor/{deviceId}/{date}`.
+                // We can't query a collection path that is dynamic like that easily if we don't know the exact date collection name logic?
+                // Ah, `selectedDate` IS the collection name (e.g. "2024-05-20").
+                // So we query collection(db, "sanary_monitor", selectedDevice, selectedDate)
                 // AND we filter by document ID starting with "app_usage"?
                 // Firestore client SDK doesn't support "startsWith" on document ID efficiently in all cases.
                 // BUT, we can just fetch all docs in that date collection (it usually has only ~3-10 docs per day: some app_usage, some events, some device snapshots).
@@ -169,11 +187,12 @@ export default function Dashboard() {
                 const dateCollectionRef = collection(db, "sanary_monitor", selectedDevice, selectedDate);
 
                 const unsubscribe = onSnapshot(dateCollectionRef, (snapshot) => {
+                    // Data handling logic
                     try {
                         if (snapshot.empty) {
                             setLoading(false);
-                            setUsageStats(null); // Ensure stats are cleared if no data
-                            setDeviceStats(null); // Ensure stats are cleared if no data
+                            setUsageStats(null);
+                            setDeviceStats(null);
                             return;
                         }
 
@@ -213,11 +232,6 @@ export default function Dashboard() {
                         const monitoringDuration = Math.max(0, latest.timestamp - earliest.timestamp);
 
                         // Add buffer to monitoring duration (e.g. +1 min) to avoid strict cutoff floating point issues
-                        // Actually, if we missed the start of the minute, we might under-count.
-                        // But generally, Usage CANNOT overlap Time.
-                        // However, Android usage stats might have slightly different clock than System.currentTimeMillis.
-                        // Let's be generous: maxPossible = duration * 1.1 + 5 minutes.
-                        // No, strict is better for the user's issue.
                         const maxPossibleUsage = monitoringDuration + 60000; // +1 minute buffer
 
                         // 3. Calculate Delta (Latest - Earliest)
@@ -229,27 +243,14 @@ export default function Dashboard() {
 
                             if (earliersApp) {
                                 const delta = latestApp.usageTimeMs - earliersApp.usageTimeMs;
-                                // If delta is robustly positive, use it.
-                                // If delta is negative (bucket reset), use latest.
                                 if (delta >= 0) {
                                     usageDelta = delta;
                                 } else {
-                                    // Bucket reset: usage is just what's in latest
                                     usageDelta = latestApp.usageTimeMs;
                                 }
-                            } else {
-                                // App missing from baseline.
-                                // If baseline was "late", this might be carried over data.
-                                // CLAMP: Usage cannot exceed the time we've been watching.
-                                // This fixes the "Install at 8pm -> 9h usage" bug.
-                                // But wait, if usageDelta (latest) is 9h, and maxPossible is 15m.
-                                // Result = 15m. Correct.
                             }
 
                             // Apply strict clamping
-                            // "You cannot use an app for 2 hours in a 1 hour window"
-                            // Exception: If monitoringDuration is 0 (first snapshot), maxPossible is 1m. Usage is clamped to 1m.
-                            // This effectively zeros out pre-existing usage on the very first snapshot of a new install.
                             if (usageDelta > maxPossibleUsage) {
                                 usageDelta = maxPossibleUsage;
                             }
@@ -260,13 +261,12 @@ export default function Dashboard() {
                         // 4. Update State with processed apps
                         setDebugInfo(`Base: ${new Date(earliest.timestamp).toLocaleTimeString()} (${earliest.apps.length} apps) -> End: ${new Date(latest.timestamp).toLocaleTimeString()}`);
 
-                        // We keep 'timestamp' from latest to show "Last Updated"
                         setUsageStats({
                             ...latest,
                             apps: processedApps,
-                            // Recalculate total screen time based on deltas
                             totalScreenTimeMs: processedApps.reduce((acc, app) => acc + app.usageTimeMs, 0)
                         });
+                        setLastUpdated(new Date());
 
                     } catch (err: any) {
                         console.error("Error processing data:", err);
@@ -281,7 +281,7 @@ export default function Dashboard() {
                 });
 
                 return () => unsubscribe();
-            }, [selectedDevice, selectedDate]);
+            }, [selectedDevice, selectedDate, refreshKey]);
 
     // Derived state
     const totalScreenTime = usageStats?.totalScreenTimeMs || 0;
@@ -309,21 +309,44 @@ export default function Dashboard() {
 
                 <div className="flex flex-wrap gap-3 items-center">
                     {/* Device Selector */}
-                    <div className="relative group flex items-center gap-2">
+                    <div className="relative">
                         <Smartphone className="absolute left-3 top-2.5 h-4 w-4 text-zinc-400" />
                         <select
-                            value={selectedDevice}
-                            onChange={(e) => setSelectedDevice(e.target.value)}
-                            className="pl-9 pr-4 py-2 bg-zinc-900 border border-zinc-800 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-rose-500/50 appearance-none min-w-[160px]"
+                            value={selectedDevice || ""}
+                            onChange={(e) => {
+                                setSelectedDevice(e.target.value);
+                                if (!devices.includes(e.target.value)) {
+                                    // ensure manual entry is added to list if needed
+                                }
+                            }}
+                            className="pl-9 pr-4 py-2 bg-zinc-900 border border-zinc-800 rounded-lg text-sm text-zinc-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 appearance-none min-w-[200px]"
                         >
-                            {devices.map(d => <option key={d} value={d}>{d.replace(/_/g, " ")}</option>)}
-                            {devices.length === 0 && <option>No devices found</option>}
+                            {devices.map((id) => (
+                                <option key={id} value={id}>
+                                    {id}
+                                </option>
+                            ))}
                         </select>
+                    </div>
 
-                        {/* Manual Add Trigger */}
+                    <button
+                        onClick={() => setRefreshKey(k => k + 1)}
+                        className="p-2 bg-zinc-900 border border-zinc-800 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
+                        title="Force Sync"
+                    >
+                        <RotateCw className={cn("h-4 w-4", loading && "animate-spin")} />
+                    </button>
+
+                    {lastUpdated && (
+                        <span className="text-xs text-zinc-500 hidden sm:inline-block">
+                            Synced: {lastUpdated.toLocaleTimeString()}
+                        </span>
+                    )}
+
+                    <div className="flex gap-2">
                         <input
                             type="text"
-                            placeholder="Add ID..."
+                            placeholder="Manually enter Device ID"
                             className="w-24 px-2 py-2 bg-zinc-900 border border-zinc-800 rounded-xl text-xs focus:outline-none focus:border-rose-500"
                             onKeyDown={(e) => {
                                 if (e.key === 'Enter') {
@@ -383,7 +406,7 @@ export default function Dashboard() {
                         </div>
                         <div className="flex items-center gap-2 text-xs text-zinc-500">
                             <Activity className="w-3 h-3" />
-                            <span>Updated {usageStats ? formatTimeAgo(usageStats.timestamp) : "Never"}</span>
+                            Updated {lastUpdated ? formatTimeAgo(lastUpdated.getTime()) : 'Waiting...'}
                         </div>
                     </div>
 
