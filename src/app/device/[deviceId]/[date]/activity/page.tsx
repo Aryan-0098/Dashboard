@@ -209,6 +209,15 @@ export default function ActivityTimelinePage() {
     };
 
     const toggleSession = (id: string) => {
+        console.log("Toggling session:", id);
+        const session = sessions.find(s => s.id === id);
+        if (session) {
+            console.log("Session details:", {
+                app: session.dominantApp.name,
+                threadCount: session.thread.length,
+                totalDuration: session.totalDuration
+            });
+        }
         setExpandedSessionId(prev => prev === id ? null : id);
     };
 
@@ -330,57 +339,60 @@ export default function ActivityTimelinePage() {
                                         </div>
 
                                         {/* Micro View (Thread) - Content */}
-                                        <div className={cn(
-                                            "border-t border-zinc-800/50 bg-black/20 transition-all duration-500 ease-in-out overflow-hidden",
-                                            isExpanded ? "max-h-[2000px] opacity-100" : "max-h-0 opacity-0"
-                                        )}>
-                                            <div className="p-5 space-y-4 relative">
-                                                {/* Thread Spine */}
-                                                <div className="absolute left-[39px] top-6 bottom-6 w-px bg-zinc-800/40" />
+                                        {isExpanded && (
+                                            <div className="border-t border-zinc-800/50 bg-black/20 animate-in fade-in slide-in-from-top-1 duration-200">
+                                                <div className="p-5 space-y-4 relative">
+                                                    {/* Thread Spine */}
+                                                    <div className="absolute left-[39px] top-6 bottom-6 w-px bg-zinc-800/40" />
 
-                                                {session.thread.map((event, tIdx) => (
-                                                    <div key={tIdx} className="relative flex items-start gap-4 group/thread">
-                                                        {/* Time */}
-                                                        <div className="w-16 text-right text-[10px] text-zinc-500 font-mono pt-1">
-                                                            {new Date(event.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                                                        </div>
-
-                                                        {/* Dot */}
-                                                        <div className={cn(
-                                                            "w-2.5 h-2.5 rounded-full border-2 border-zinc-950 z-10 shrink-0 mt-1.5 transition-transform group-hover/thread:scale-125",
-                                                            event.action === "OPEN" ? "bg-green-500 box-shadow-green" : "bg-zinc-600"
-                                                        )} />
-
-                                                        {/* Event Details */}
-                                                        <div className="flex-1 min-w-0 pb-2">
-                                                            <div className="flex items-center gap-2 mb-1">
-                                                                <span className={cn(
-                                                                    "text-sm font-semibold tracking-tight",
-                                                                    event.action === "OPEN" ? "text-zinc-200" : "text-zinc-500 line-through decoration-zinc-700 decoration-2"
-                                                                )}>
-                                                                    {formatAppName(event.pkg, event.appName)}
-                                                                </span>
-                                                                <span className={cn(
-                                                                    "text-[10px] px-1.5 py-0.5 rounded border uppercase tracking-wider font-bold",
-                                                                    event.action === "OPEN"
-                                                                        ? "bg-green-500/10 text-green-500 border-green-500/20"
-                                                                        : "bg-zinc-800 text-zinc-500 border-zinc-700"
-                                                                )}>
-                                                                    {event.action}
-                                                                </span>
-                                                            </div>
-                                                            {/* State Duration */}
-                                                            {event.durationMs && event.durationMs > 1000 && event.action === "OPEN" && (
-                                                                <div className="flex items-center gap-2 text-[11px] text-zinc-400 bg-zinc-800/30 px-2 py-1 rounded inline-block border border-zinc-800/50">
-                                                                    <span>⚡ Active for</span>
-                                                                    <span className="text-zinc-200 font-mono font-medium">{formatDuration(event.durationMs)}</span>
+                                                    {session.thread.length === 0 ? (
+                                                        <div className="text-zinc-500 text-sm pl-12">No detailed events recorded for this session.</div>
+                                                    ) : (
+                                                        session.thread.map((event, tIdx) => (
+                                                            <div key={tIdx} className="relative flex items-start gap-4 group/thread">
+                                                                {/* Time */}
+                                                                <div className="w-16 text-right text-[10px] text-zinc-500 font-mono pt-1">
+                                                                    {new Date(event.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                                                                 </div>
-                                                            )}
-                                                        </div>
-                                                    </div>
-                                                ))}
+
+                                                                {/* Dot */}
+                                                                <div className={cn(
+                                                                    "w-2.5 h-2.5 rounded-full border-2 border-zinc-950 z-10 shrink-0 mt-1.5 transition-transform group-hover/thread:scale-125",
+                                                                    event.action === "OPEN" ? "bg-green-500 box-shadow-green" : "bg-zinc-600"
+                                                                )} />
+
+                                                                {/* Event Details */}
+                                                                <div className="flex-1 min-w-0 pb-2">
+                                                                    <div className="flex items-center gap-2 mb-1">
+                                                                        <span className={cn(
+                                                                            "text-sm font-semibold tracking-tight",
+                                                                            event.action === "OPEN" ? "text-zinc-200" : "text-zinc-500 line-through decoration-zinc-700 decoration-2"
+                                                                        )}>
+                                                                            {formatAppName(event.pkg, event.appName)}
+                                                                        </span>
+                                                                        <span className={cn(
+                                                                            "text-[10px] px-1.5 py-0.5 rounded border uppercase tracking-wider font-bold",
+                                                                            event.action === "OPEN"
+                                                                                ? "bg-green-500/10 text-green-500 border-green-500/20"
+                                                                                : "bg-zinc-800 text-zinc-500 border-zinc-700"
+                                                                        )}>
+                                                                            {event.action}
+                                                                        </span>
+                                                                    </div>
+                                                                    {/* State Duration */}
+                                                                    {event.durationMs && event.durationMs > 1000 && event.action === "OPEN" && (
+                                                                        <div className="flex items-center gap-2 text-[11px] text-zinc-400 bg-zinc-800/30 px-2 py-1 rounded inline-block border border-zinc-800/50">
+                                                                            <span>⚡ Active for</span>
+                                                                            <span className="text-zinc-200 font-mono font-medium">{formatDuration(event.durationMs)}</span>
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            </div>
+                                                        ))
+                                                    )}
+                                                </div>
                                             </div>
-                                        </div>
+                                        )}
                                     </div>
                                 </div>
                             );
