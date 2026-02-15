@@ -472,7 +472,17 @@ export default function Dashboard() {
                             viewMode === "grid" ? "grid grid-cols-1 sm:grid-cols-2" : "flex flex-col"
                         )}>
                             {filteredApps.map((app, idx) => (
-                                <div key={app.packageName} className="group relative bg-zinc-900/40 hover:bg-zinc-900/80 border border-zinc-800 hover:border-zinc-700 p-4 rounded-2xl transition-all duration-300">
+                                <div
+                                    key={app.packageName}
+                                    onClick={() => {
+                                        if (selectedDevice && selectedDate) {
+                                            // Encode package name to handle dots/special chars
+                                            const encodedPackage = encodeURIComponent(app.packageName);
+                                            window.location.href = `/device/${selectedDevice}/${selectedDate}/app/${encodedPackage}`;
+                                        }
+                                    }}
+                                    className="group relative bg-zinc-900/40 hover:bg-zinc-900/80 border border-zinc-800 hover:border-zinc-700 p-4 rounded-2xl transition-all duration-300 cursor-pointer"
+                                >
                                     {/* Progress Background (List mode only) */}
                                     {viewMode === "list" && (
                                         <div
