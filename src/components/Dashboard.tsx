@@ -143,145 +143,108 @@ export default function Dashboard() {
     useEffect(() => {
         if (!selectedDevice || !selectedDate) return;
 
-        async function fetchData() {
-            setLoading(true);
-            setError("");
-            setUsageStats(null);
-            setDeviceStats(null);
+        setLoading(true);
+        setError("");
+        setDebugInfo("");
+        setUsageStats(null);
+        setDeviceStats(null);
 
+        const dateCollectionRef = collection(db, "sanary_monitor", selectedDevice, selectedDate);
+
+        const unsubscribe = onSnapshot(dateCollectionRef, (snapshot) => {
             try {
-                // Fetch App Usage
-                setLoading(true);
-                setError("");
-                setDebugInfo(""); // Clear debug info
-
-                // Clear stats immediately to prevent data leakage between devices
-                setUsageStats(null);
-                setDeviceStats(null);
-
-                // Path: sanary_monitor/{deviceId}/{date}/app_usage_{timestamp}
-
-                // This is tricky. The valid collection path is `sanary_monitor/{deviceId}/{date}`.
-                // We can't query a collection path that is dynamic like that easily if we don't know the exact date collection name logic?
-                // Ah, `selectedDate` IS the collection name (e.g. "2024-05-20").
-                // So we query collection(db, "sanary_monitor", selectedDevice, selectedDate)
-                setLoading(true);
-                setError("");
-                setDebugInfo(""); // Clear debug info
-
-                // Clear stats immediately to prevent data leakage between devices
-                setUsageStats(null);
-                setDeviceStats(null);
-
-                // Path: sanary_monitor/{deviceId}/{date}/app_usage_{timestamp}
-
-                // This is tricky. The valid collection path is `sanary_monitor/{deviceId}/{date}`.
-                // We can't query a collection path that is dynamic like that easily if we don't know the exact date collection name logic?
-                // Ah, `selectedDate` IS the collection name (e.g. "2024-05-20").
-                // So we query collection(db, "sanary_monitor", selectedDevice, selectedDate)
-                // AND we filter by document ID starting with "app_usage"?
-                // Firestore client SDK doesn't support "startsWith" on document ID efficiently in all cases.
-                // BUT, we can just fetch all docs in that date collection (it usually has only ~3-10 docs per day: some app_usage, some events, some device snapshots).
-                // It's cheaper to read the whole collection for the day.
-
-                const dateCollectionRef = collection(db, "sanary_monitor", selectedDevice, selectedDate);
-
-                const unsubscribe = onSnapshot(dateCollectionRef, (snapshot) => {
-                    // Data handling logic
-                    try {
-                        if (snapshot.empty) {
-                            setLoading(false);
-                            setUsageStats(null);
-                            setDeviceStats(null);
-                            return;
-                        }
-
-                        // 1. Separate App Usage snapshots and Device snapshots
-                        const appUsageSnapshots: UsageStats[] = [];
-                        let latestDevice: DeviceStats | null = null;
-
-                        snapshot.forEach(doc => {
-                            const data = doc.data();
-                            if (doc.id.startsWith("app_usage_")) {
-                                appUsageSnapshots.push(data as UsageStats);
-                            } else if (doc.id.startsWith("device_")) {
-                                if (!latestDevice || (data.timestamp > latestDevice.timestamp)) {
-                                    latestDevice = data as DeviceStats;
-                                }
-                            }
-                        });
-
-                        setDeviceStats(latestDevice);
-
-                        // 2. Sort usage snapshots by timestamp
-                        appUsageSnapshots.sort((a, b) => a.timestamp - b.timestamp);
-
-                        // Filter out snapshots with no apps (common on fresh install before permissions settle)
-                        const validSnapshots = appUsageSnapshots.filter(s => s.apps && s.apps.length > 0);
-
-                        if (validSnapshots.length === 0) {
-                            setUsageStats(null);
-                            setLoading(false);
-                            return;
-                        }
-
-                        const earliest = validSnapshots[0];
-                        const latest = validSnapshots[validSnapshots.length - 1];
-
-                        // Calculate physical time window of monitoring
-                        const monitoringDuration = Math.max(0, latest.timestamp - earliest.timestamp);
-
-                        // Add buffer to monitoring duration (e.g. +1 min) to avoid strict cutoff floating point issues
-                        const maxPossibleUsage = monitoringDuration + 60000; // +1 minute buffer
-
-                        // 3. Calculate Delta (Latest - Earliest)
-                        const processedApps = latest.apps.map(latestApp => {
-                            // Find this app in the earliest snapshot from the SAME day
-                            const earliersApp = earliest.apps.find(a => a.packageName === latestApp.packageName);
-
-                            let usageDelta = latestApp.usageTimeMs;
-
-                            if (earliersApp) {
-                                const delta = latestApp.usageTimeMs - earliersApp.usageTimeMs;
-                                if (delta >= 0) {
-                                    usageDelta = delta;
-                                } else {
-                                    usageDelta = latestApp.usageTimeMs;
-                                }
-                            }
-
-                            // Apply strict clamping
-                            if (usageDelta > maxPossibleUsage) {
-                                usageDelta = maxPossibleUsage;
-                            }
-
-                            return { ...latestApp, usageTimeMs: usageDelta };
-                        });
-
-                        // 4. Update State with processed apps
-                        setDebugInfo(`Base: ${new Date(earliest.timestamp).toLocaleTimeString()} (${earliest.apps.length} apps) -> End: ${new Date(latest.timestamp).toLocaleTimeString()}`);
-
-                        setUsageStats({
-                            ...latest,
-                            apps: processedApps,
-                            totalScreenTimeMs: processedApps.reduce((acc, app) => acc + app.usageTimeMs, 0)
-                        });
-                        setLastUpdated(new Date());
-
-                    } catch (err: any) {
-                        console.error("Error processing data:", err);
-                        setError(`Data Processing Error: ${err.message}`);
-                    } finally {
-                        setLoading(false);
-                    }
-                }, (err) => {
-                    console.error("Error subscribing to data:", err);
-                    setError(`Real-time Sync Error: ${err.code} - ${err.message}`);
+                if (snapshot.empty) {
                     setLoading(false);
+                    setUsageStats(null);
+                    setDeviceStats(null);
+                    return;
+                }
+
+                // 1. Separate App Usage snapshots and Device snapshots
+                const appUsageSnapshots: UsageStats[] = [];
+                let latestDevice: DeviceStats | null = null;
+
+                snapshot.forEach(doc => {
+                    const data = doc.data();
+                    if (doc.id.startsWith("app_usage_")) {
+                        appUsageSnapshots.push(data as UsageStats);
+                    } else if (doc.id.startsWith("device_")) {
+                        if (!latestDevice || (data.timestamp > latestDevice.timestamp)) {
+                            latestDevice = data as DeviceStats;
+                        }
+                    }
                 });
 
-                return () => unsubscribe();
-            }, [selectedDevice, selectedDate, refreshKey]);
+                setDeviceStats(latestDevice);
+
+                // 2. Sort usage snapshots by timestamp
+                appUsageSnapshots.sort((a, b) => a.timestamp - b.timestamp);
+
+                // Filter out snapshots with no apps
+                const validSnapshots = appUsageSnapshots.filter(s => s.apps && s.apps.length > 0);
+
+                if (validSnapshots.length === 0) {
+                    setUsageStats(null);
+                    setLoading(false);
+                    return;
+                }
+
+                const earliest = validSnapshots[0];
+                const latest = validSnapshots[validSnapshots.length - 1];
+
+                // Calculate physical time window of monitoring
+                const monitoringDuration = Math.max(0, latest.timestamp - earliest.timestamp);
+
+                // Add buffer
+                const maxPossibleUsage = monitoringDuration + 60000;
+
+                // 3. Calculate Delta (Latest - Earliest)
+                const processedApps = latest.apps.map(latestApp => {
+                    const earliersApp = earliest.apps.find(a => a.packageName === latestApp.packageName);
+
+                    let usageDelta = latestApp.usageTimeMs;
+
+                    if (earliersApp) {
+                        const delta = latestApp.usageTimeMs - earliersApp.usageTimeMs;
+                        if (delta >= 0) {
+                            usageDelta = delta;
+                        } else {
+                            usageDelta = latestApp.usageTimeMs;
+                        }
+                    }
+
+                    // Apply strict clamping
+                    if (usageDelta > maxPossibleUsage) {
+                        usageDelta = maxPossibleUsage;
+                    }
+
+                    return { ...latestApp, usageTimeMs: usageDelta };
+                });
+
+                // 4. Update State
+                setDebugInfo(`Base: ${new Date(earliest.timestamp).toLocaleTimeString()} (${earliest.apps.length} apps) -> End: ${new Date(latest.timestamp).toLocaleTimeString()}`);
+
+                setUsageStats({
+                    ...latest,
+                    apps: processedApps,
+                    totalScreenTimeMs: processedApps.reduce((acc, app) => acc + app.usageTimeMs, 0)
+                });
+                setLastUpdated(new Date());
+
+            } catch (err: any) {
+                console.error("Error processing data:", err);
+                setError(`Data Processing Error: ${err.message}`);
+            } finally {
+                setLoading(false);
+            }
+        }, (err) => {
+            console.error("Error subscribing to data:", err);
+            setError(`Real-time Sync Error: ${err.code} - ${err.message}`);
+            setLoading(false);
+        });
+
+        return () => unsubscribe();
+    }, [selectedDevice, selectedDate, refreshKey]);
 
     // Derived state
     const totalScreenTime = usageStats?.totalScreenTimeMs || 0;
