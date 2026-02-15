@@ -66,10 +66,24 @@ const COLORS = [
 
 export default function Dashboard() {
     const [devices, setDevices] = useState<string[]>([]);
-    const [selectedDevice, setSelectedDevice] = useState<string>("");
-    const [selectedDate, setSelectedDate] = useState<string>(
-        new Date().toISOString().split("T")[0]
-    );
+    const [selectedDevice, setSelectedDevice] = useState<string | null>(null);
+
+    // Initial load of selected device
+    useEffect(() => {
+        const saved = localStorage.getItem("sanary_selected_device");
+        if (saved) setSelectedDevice(saved);
+    }, []);
+
+    // Persist selected device
+    useEffect(() => {
+        if (selectedDevice) {
+            localStorage.setItem("sanary_selected_device", selectedDevice);
+        }
+    }, [selectedDevice]);
+
+    const [selectedDate, setSelectedDate] = useState(() => {
+        return new Date().toISOString().split('T')[0];
+    });
 
     const [usageStats, setUsageStats] = useState<UsageStats | null>(null);
     const [deviceStats, setDeviceStats] = useState<DeviceStats | null>(null);
@@ -92,7 +106,7 @@ export default function Dashboard() {
                 const uniqueIds = Array.from(new Set([...fetchedIds, ...savedIds])) as string[]; // Explicit cast
 
                 setDevices(uniqueIds);
-                if (uniqueIds.length > 0 && !selectedDevice) {
+                if (uniqueIds.length > 0 && !localStorage.getItem("sanary_selected_device")) {
                     setSelectedDevice(uniqueIds[0]);
                 }
             } catch (err: any) {
@@ -102,7 +116,7 @@ export default function Dashboard() {
                 if (saved) {
                     const ids = JSON.parse(saved) as string[];
                     setDevices(ids);
-                    if (ids.length > 0) setSelectedDevice(ids[0]);
+                    if (ids.length > 0 && !localStorage.getItem("sanary_selected_device")) setSelectedDevice(ids[0]);
                 }
                 // Show actual error
                 setError(`Device Fetch Error: ${err.message || JSON.stringify(err)}`);
@@ -151,6 +165,7 @@ export default function Dashboard() {
                 };
 
                 // Fetch all docs for the date to find First and Last snapshots
+                if (!selectedDevice) return;
                 const dateCollectionRef = collection(db, "sanary_monitor", selectedDevice, selectedDate);
                 const snapshot = await getDocs(dateCollectionRef);
 
@@ -191,8 +206,18 @@ export default function Dashboard() {
                 const earliest = validSnapshots[0];
                 const latest = validSnapshots[validSnapshots.length - 1];
 
+                // Calculate physical time window of monitoring
+                const monitoringDuration = Math.max(0, latest.timestamp - earliest.timestamp);
+
+                // Add buffer to monitoring duration (e.g. +1 min) to avoid strict cutoff floating point issues
+                // Actually, if we missed the start of the minute, we might under-count. 
+                // But generally, Usage CANNOT overlap Time. 
+                // However, Android usage stats might have slightly different clock than System.currentTimeMillis. 
+                // Let's be generous: maxPossible = duration * 1.1 + 5 minutes.
+                // No, strict is better for the user's issue.
+                const maxPossibleUsage = monitoringDuration + 60000; // +1 minute buffer
+
                 // 3. Calculate Delta (Latest - Earliest)
-                // This removes invalid "carry-over" usage from previous days if the Android bucket didn't reset.
                 const processedApps = latest.apps.map(latestApp => {
                     // Find this app in the earliest snapshot from the SAME day
                     const earliersApp = earliest.apps.find(a => a.packageName === latestApp.packageName);
@@ -206,18 +231,24 @@ export default function Dashboard() {
                         if (delta >= 0) {
                             usageDelta = delta;
                         } else {
+                            // Bucket reset: usage is just what's in latest
                             usageDelta = latestApp.usageTimeMs;
                         }
-                    } else if (earliest.timestamp > getStartOfDay(selectedDate) + 600000) {
-                        // If the earliest snapshot was significantly after the start of the day (e.g. fresh install at 8PM)
-                        // AND the app is missing from it, but present now with HUGE usage...
-                        // It's ambiguous. But likely the app WAS running then, just not captured.
-                        // However, strictly speaking, if not in earliest, it implies 0 usage. 
-                        // We will trust 'latest' unless it's suspiciously large for the time delta.
-                        // For now, stick to standard logic: missing baseline = new usage.
-                        // (User installed at 8pm, usage in snap 1 is 9h. Snap 2 is 9.1h. App missing in snap 1 -> shows 9.1h. ERROR).
-                        // FIX: We need robust baseline. User said Yesterday shows 9h 55.
-                        // If 'earliest' was the empty one, we fixed it above.
+                    } else {
+                        // App missing from baseline.
+                        // If baseline was "late", this might be carried over data.
+                        // CLAMP: Usage cannot exceed the time we've been watching.
+                        // This fixes the "Install at 8pm -> 9h usage" bug.
+                        // But wait, if usageDelta (latest) is 9h, and maxPossible is 15m.
+                        // Result = 15m. Correct.
+                    }
+
+                    // Apply strict clamping
+                    // "You cannot use an app for 2 hours in a 1 hour window"
+                    // Exception: If monitoringDuration is 0 (first snapshot), maxPossible is 1m. Usage is clamped to 1m.
+                    // This effectively zeros out pre-existing usage on the very first snapshot of a new install.
+                    if (usageDelta > maxPossibleUsage) {
+                        usageDelta = maxPossibleUsage;
                     }
 
                     return { ...latestApp, usageTimeMs: usageDelta };
