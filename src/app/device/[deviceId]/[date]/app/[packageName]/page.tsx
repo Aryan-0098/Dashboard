@@ -92,7 +92,7 @@ export default function AppDetailsPage() {
             const now = Date.now();
             const isToday = new Date().toISOString().split('T')[0] === date;
 
-            appEvents.forEach((event) => {
+            for (const event of appEvents) {
                 if (event.eventType === "APP_OPENED") {
                     if (currentStart) {
                         // Previous session wasn't closed. Assume it ended just now (at new start).
@@ -116,7 +116,7 @@ export default function AppDetailsPage() {
                     }
                     // Else: Dangling End. Ignore.
                 }
-            });
+            }
 
             // Handle ongoing session (last event was OPEN)
             if (currentStart) {

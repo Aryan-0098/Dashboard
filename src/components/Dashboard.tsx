@@ -333,6 +333,20 @@ export default function Dashboard() {
                             className="pl-9 pr-4 py-2 bg-zinc-900 border border-zinc-800 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-rose-500/50 text-zinc-300"
                         />
                     </div>
+
+                    {/* Activity Button */}
+                    <button
+                        onClick={() => {
+                            if (selectedDevice && selectedDate) {
+                                window.location.href = `/device/${selectedDevice}/${selectedDate}/activity`;
+                            }
+                        }}
+                        className="flex items-center gap-2 px-4 py-2 bg-rose-500 hover:bg-rose-600 text-white rounded-xl transition-colors text-sm font-medium shadow-lg shadow-rose-900/20 ml-2"
+                        title="View Detailed Activity Timeline"
+                    >
+                        <Activity className="w-4 h-4" />
+                        <span className="hidden sm:inline">Timeline</span>
+                    </button>
                 </div>
             </header>
 
@@ -423,6 +437,7 @@ export default function Dashboard() {
                         </h2>
 
                         <div className="flex items-center gap-4">
+                            {/* Device Selector */}
                             <span className="text-[10px] text-zinc-700 font-mono">{debugInfo}</span>
                             {usageStats && (
                                 <div className="hidden md:block text-[10px] text-zinc-600 font-mono">
