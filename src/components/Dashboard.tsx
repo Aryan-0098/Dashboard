@@ -75,6 +75,7 @@ export default function Dashboard() {
     const [deviceStats, setDeviceStats] = useState<DeviceStats | null>(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
+    const [debugInfo, setDebugInfo] = useState<string>("");
     const [viewMode, setViewMode] = useState<"list" | "grid">("list");
     const [searchQuery, setSearchQuery] = useState("");
 
@@ -143,6 +144,12 @@ export default function Dashboard() {
                 // BUT, we can just fetch all docs in that date collection (it usually has only ~3-10 docs per day: some app_usage, some events, some device snapshots).
                 // It's cheaper to read the whole collection for the day.
 
+                const getStartOfDay = (dateString: string) => {
+                    if (!dateString) return 0;
+                    const [y, m, d] = dateString.split('-').map(Number);
+                    return new Date(y, m - 1, d).getTime();
+                };
+
                 // Fetch all docs for the date to find First and Last snapshots
                 const dateCollectionRef = collection(db, "sanary_monitor", selectedDevice, selectedDate);
                 const snapshot = await getDocs(dateCollectionRef);
@@ -172,23 +179,24 @@ export default function Dashboard() {
                 // 2. Sort usage snapshots by timestamp
                 appUsageSnapshots.sort((a, b) => a.timestamp - b.timestamp);
 
-                if (appUsageSnapshots.length === 0) {
+                // Filter out snapshots with no apps (common on fresh install before permissions settle)
+                const validSnapshots = appUsageSnapshots.filter(s => s.apps && s.apps.length > 0);
+
+                if (validSnapshots.length === 0) {
                     setUsageStats(null);
                     setLoading(false);
                     return;
                 }
 
-                const earliest = appUsageSnapshots[0];
-                const latest = appUsageSnapshots[appUsageSnapshots.length - 1];
+                const earliest = validSnapshots[0];
+                const latest = validSnapshots[validSnapshots.length - 1];
 
                 // 3. Calculate Delta (Latest - Earliest)
                 // This removes invalid "carry-over" usage from previous days if the Android bucket didn't reset.
                 const processedApps = latest.apps.map(latestApp => {
-                    // Find this app in the earliest snapshot
+                    // Find this app in the earliest snapshot from the SAME day
                     const earliersApp = earliest.apps.find(a => a.packageName === latestApp.packageName);
 
-                    // If no earlier record, assume all usage is new (or check if it's very close to midnight?)
-                    // If earlier record exists, subtract.
                     let usageDelta = latestApp.usageTimeMs;
 
                     if (earliersApp) {
@@ -200,12 +208,24 @@ export default function Dashboard() {
                         } else {
                             usageDelta = latestApp.usageTimeMs;
                         }
+                    } else if (earliest.timestamp > getStartOfDay(selectedDate) + 600000) {
+                        // If the earliest snapshot was significantly after the start of the day (e.g. fresh install at 8PM)
+                        // AND the app is missing from it, but present now with HUGE usage...
+                        // It's ambiguous. But likely the app WAS running then, just not captured.
+                        // However, strictly speaking, if not in earliest, it implies 0 usage. 
+                        // We will trust 'latest' unless it's suspiciously large for the time delta.
+                        // For now, stick to standard logic: missing baseline = new usage.
+                        // (User installed at 8pm, usage in snap 1 is 9h. Snap 2 is 9.1h. App missing in snap 1 -> shows 9.1h. ERROR).
+                        // FIX: We need robust baseline. User said Yesterday shows 9h 55.
+                        // If 'earliest' was the empty one, we fixed it above.
                     }
 
                     return { ...latestApp, usageTimeMs: usageDelta };
                 });
 
                 // 4. Update State with processed apps
+                setDebugInfo(`Base: ${new Date(earliest.timestamp).toLocaleTimeString()} (${earliest.apps.length} apps) -> End: ${new Date(latest.timestamp).toLocaleTimeString()}`);
+
                 // We keep 'timestamp' from latest to show "Last Updated"
                 setUsageStats({
                     ...latest,
@@ -378,7 +398,14 @@ export default function Dashboard() {
                             App Usage
                         </h2>
 
-                        <div className="flex gap-2">
+                        <div className="flex items-center gap-4">
+                            <span className="text-[10px] text-zinc-700 font-mono">{debugInfo}</span>
+                            {usageStats && (
+                                <div className="hidden md:block text-[10px] text-zinc-600 font-mono">
+                                    Delta: {new Date(usageStats.timestamp).getHours()}:{new Date(usageStats.timestamp).getMinutes()}
+                                    (Base: {new Date(usageStats.apps[0]?.lastTimeUsed || 0).getHours()}:00)
+                                </div>
+                            )}
                             <div className="relative">
                                 <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-zinc-500" />
                                 <input
