@@ -185,12 +185,26 @@ export default function Dashboard() {
     }, [selectedDevice, selectedDate]);
 
     // Derived state
-    const totalScreenTime = usageStats?.totalScreenTimeMs || 0;
-    const filteredApps = usageStats?.apps.filter(app => {
+    // Parse selectedDate (YYYY-MM-DD) to Local Midnight Timestamp
+    const getStartOfDay = (dateString: string) => {
+        if (!dateString) return 0;
+        const [y, m, d] = dateString.split('-').map(Number);
+        return new Date(y, m - 1, d).getTime();
+    };
+
+    const startOfDay = getStartOfDay(selectedDate);
+
+    // Filter apps: Exclude any app strictly last used BEFORE today (stale data from Android bucket)
+    const validApps = (usageStats?.apps || []).filter(app => app.lastTimeUsed >= startOfDay);
+
+    // Recalculate Total Screen Time from valid apps only
+    const calculatedTotalScreenTime = validApps.reduce((acc, app) => acc + app.usageTimeMs, 0);
+
+    const filteredApps = validApps.filter(app => {
         const displayName = formatAppName(app.packageName, app.appName);
         return displayName.toLowerCase().includes(searchQuery.toLowerCase()) ||
             app.appName.toLowerCase().includes(searchQuery.toLowerCase());
-    }).sort((a, b) => b.usageTimeMs - a.usageTimeMs) || [];
+    }).sort((a, b) => b.usageTimeMs - a.usageTimeMs);
 
     const maxUsageTime = filteredApps.length > 0 ? filteredApps[0].usageTimeMs : 1;
 
@@ -278,7 +292,7 @@ export default function Dashboard() {
 
                         <h2 className="text-zinc-400 text-sm font-medium mb-1">Total Screen Time</h2>
                         <div className="text-5xl font-bold tracking-tight text-white mb-2">
-                            {formatDuration(totalScreenTime)}
+                            {formatDuration(calculatedTotalScreenTime)}
                         </div>
                         <div className="flex items-center gap-2 text-xs text-zinc-500">
                             <Activity className="w-3 h-3" />
@@ -321,7 +335,7 @@ export default function Dashboard() {
                         <h3 className="font-semibold text-indigo-300 mb-2">Did you know?</h3>
                         <p className="text-sm text-indigo-400/80 leading-relaxed">
                             You've unlocked your phone {deviceStats?.totalUnlocks || 0} times today.
-                            That's an average of once every {deviceStats?.totalUnlocks ? Math.round((deviceStats.screenOnTimeMs / 60000) / deviceStats.totalUnlocks) : 0} minutes of use.
+                            That's an average of once every {deviceStats?.totalUnlocks ? Math.round((calculatedTotalScreenTime / 60000) / deviceStats.totalUnlocks) : 0} minutes of use.
                         </p>
                     </div>
                 </div>
@@ -405,7 +419,7 @@ export default function Dashboard() {
                                         <div className="text-right">
                                             <div className="font-bold text-zinc-200">{formatDuration(app.usageTimeMs)}</div>
                                             <div className="text-[10px] text-zinc-500">
-                                                {Math.round((app.usageTimeMs / totalScreenTime) * 100)}%
+                                                {calculatedTotalScreenTime > 0 ? Math.round((app.usageTimeMs / calculatedTotalScreenTime) * 100) : 0}%
                                             </div>
                                         </div>
                                     </div>
