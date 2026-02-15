@@ -143,26 +143,23 @@ export default function Dashboard() {
                 // BUT, we can just fetch all docs in that date collection (it usually has only ~3-10 docs per day: some app_usage, some events, some device snapshots).
                 // It's cheaper to read the whole collection for the day.
 
+                // Fetch all docs for the date to find First and Last snapshots
                 const dateCollectionRef = collection(db, "sanary_monitor", selectedDevice, selectedDate);
                 const snapshot = await getDocs(dateCollectionRef);
 
                 if (snapshot.empty) {
-                    // No data for this date
                     setLoading(false);
                     return;
                 }
 
-                // Parse docs to find latest app_usage and device stats
-                let latestUsage: UsageStats | null = null;
+                // 1. Separate App Usage snapshots and Device snapshots
+                const appUsageSnapshots: UsageStats[] = [];
                 let latestDevice: DeviceStats | null = null;
 
                 snapshot.forEach(doc => {
                     const data = doc.data();
                     if (doc.id.startsWith("app_usage_")) {
-                        // Check if this one is newer
-                        if (!latestUsage || (data.timestamp > latestUsage.timestamp)) {
-                            latestUsage = data as UsageStats;
-                        }
+                        appUsageSnapshots.push(data as UsageStats);
                     } else if (doc.id.startsWith("device_")) {
                         if (!latestDevice || (data.timestamp > latestDevice.timestamp)) {
                             latestDevice = data as DeviceStats;
@@ -170,8 +167,52 @@ export default function Dashboard() {
                     }
                 });
 
-                setUsageStats(latestUsage);
                 setDeviceStats(latestDevice);
+
+                // 2. Sort usage snapshots by timestamp
+                appUsageSnapshots.sort((a, b) => a.timestamp - b.timestamp);
+
+                if (appUsageSnapshots.length === 0) {
+                    setUsageStats(null);
+                    setLoading(false);
+                    return;
+                }
+
+                const earliest = appUsageSnapshots[0];
+                const latest = appUsageSnapshots[appUsageSnapshots.length - 1];
+
+                // 3. Calculate Delta (Latest - Earliest)
+                // This removes invalid "carry-over" usage from previous days if the Android bucket didn't reset.
+                const processedApps = latest.apps.map(latestApp => {
+                    // Find this app in the earliest snapshot
+                    const earliersApp = earliest.apps.find(a => a.packageName === latestApp.packageName);
+
+                    // If no earlier record, assume all usage is new (or check if it's very close to midnight?)
+                    // If earlier record exists, subtract.
+                    let usageDelta = latestApp.usageTimeMs;
+
+                    if (earliersApp) {
+                        const delta = latestApp.usageTimeMs - earliersApp.usageTimeMs;
+                        // If delta is robustly positive, use it.
+                        // If delta is negative (bucket reset), use latest.
+                        if (delta >= 0) {
+                            usageDelta = delta;
+                        } else {
+                            usageDelta = latestApp.usageTimeMs;
+                        }
+                    }
+
+                    return { ...latestApp, usageTimeMs: usageDelta };
+                });
+
+                // 4. Update State with processed apps
+                // We keep 'timestamp' from latest to show "Last Updated"
+                setUsageStats({
+                    ...latest,
+                    apps: processedApps,
+                    // Recalculate total screen time based on deltas
+                    totalScreenTimeMs: processedApps.reduce((acc, app) => acc + app.usageTimeMs, 0)
+                });
 
             } catch (err: any) {
                 console.error("Error fetching data:", err);
@@ -185,22 +226,10 @@ export default function Dashboard() {
     }, [selectedDevice, selectedDate]);
 
     // Derived state
-    // Parse selectedDate (YYYY-MM-DD) to Local Midnight Timestamp
-    const getStartOfDay = (dateString: string) => {
-        if (!dateString) return 0;
-        const [y, m, d] = dateString.split('-').map(Number);
-        return new Date(y, m - 1, d).getTime();
-    };
+    const totalScreenTime = usageStats?.totalScreenTimeMs || 0;
 
-    const startOfDay = getStartOfDay(selectedDate);
-
-    // Filter apps: Exclude any app strictly last used BEFORE today (stale data from Android bucket)
-    const validApps = (usageStats?.apps || []).filter(app => app.lastTimeUsed >= startOfDay);
-
-    // Recalculate Total Screen Time from valid apps only
-    const calculatedTotalScreenTime = validApps.reduce((acc, app) => acc + app.usageTimeMs, 0);
-
-    const filteredApps = validApps.filter(app => {
+    // Sort and Filter based on processed stats
+    const filteredApps = (usageStats?.apps || []).filter(app => {
         const displayName = formatAppName(app.packageName, app.appName);
         return displayName.toLowerCase().includes(searchQuery.toLowerCase()) ||
             app.appName.toLowerCase().includes(searchQuery.toLowerCase());
@@ -292,7 +321,7 @@ export default function Dashboard() {
 
                         <h2 className="text-zinc-400 text-sm font-medium mb-1">Total Screen Time</h2>
                         <div className="text-5xl font-bold tracking-tight text-white mb-2">
-                            {formatDuration(calculatedTotalScreenTime)}
+                            {formatDuration(totalScreenTime)}
                         </div>
                         <div className="flex items-center gap-2 text-xs text-zinc-500">
                             <Activity className="w-3 h-3" />
@@ -335,7 +364,7 @@ export default function Dashboard() {
                         <h3 className="font-semibold text-indigo-300 mb-2">Did you know?</h3>
                         <p className="text-sm text-indigo-400/80 leading-relaxed">
                             You've unlocked your phone {deviceStats?.totalUnlocks || 0} times today.
-                            That's an average of once every {deviceStats?.totalUnlocks ? Math.round((calculatedTotalScreenTime / 60000) / deviceStats.totalUnlocks) : 0} minutes of use.
+                            That's an average of once every {deviceStats?.totalUnlocks ? Math.round((totalScreenTime / 60000) / deviceStats.totalUnlocks) : 0} minutes of use.
                         </p>
                     </div>
                 </div>
@@ -419,7 +448,7 @@ export default function Dashboard() {
                                         <div className="text-right">
                                             <div className="font-bold text-zinc-200">{formatDuration(app.usageTimeMs)}</div>
                                             <div className="text-[10px] text-zinc-500">
-                                                {calculatedTotalScreenTime > 0 ? Math.round((app.usageTimeMs / calculatedTotalScreenTime) * 100) : 0}%
+                                                {totalScreenTime > 0 ? Math.round((app.usageTimeMs / totalScreenTime) * 100) : 0}%
                                             </div>
                                         </div>
                                     </div>
